@@ -1,0 +1,7 @@
+name: TeraxPay
+version: '${version}'
+main: world.terax.TeraxPay
+commands:
+  pay:
+    description: Compra um produto usando Pix ou Cartão
+    usage: /pay <produto> <pix|credit>
