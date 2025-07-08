@@ -6,6 +6,17 @@ plugins {
 group = 'world.terax'
 version = '1.0-SNAPSHOT'
 
+def targetJavaVersion = 8
+
+java {
+    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
+    sourceCompatibility = javaVersion
+    targetCompatibility = javaVersion
+    if (JavaVersion.current() < javaVersion) {
+        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+}
+
 repositories {
     mavenCentral()
     mavenLocal()
@@ -20,25 +31,24 @@ repositories {
 }
 
 dependencies {
-    compileOnly "org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT"
-    implementation 'org.java-websocket:Java-WebSocket:1.5.3'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    implementation 'com.google.code.gson:gson:2.10.1'
-}
+    // Spigot API
+    compileOnly 'org.spigotmc:spigot:1.8.8-R0.1-SNAPSHOT'
 
-def targetJavaVersion = 8
-java {
-    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
-    sourceCompatibility = javaVersion
-    targetCompatibility = javaVersion
-    if (JavaVersion.current() < javaVersion) {
-        toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    }
+    // QR Code (ZXing)
+    implementation 'com.google.zxing:core:3.5.1'
+    implementation 'com.google.zxing:javase:3.5.1'
+
+    // Utilitários
+    implementation 'com.google.code.gson:gson:2.8.8'
+    implementation 'org.java-websocket:Java-WebSocket:1.5.3'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
-
     if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
         options.release.set(targetJavaVersion)
     }
@@ -47,14 +57,29 @@ tasks.withType(JavaCompile).configureEach {
 processResources {
     def props = [version: version]
     inputs.properties props
-    filteringCharset 'UTF-8'
+    filteringCharset = 'UTF-8'
     filesMatching('plugin.yml') {
         expand props
     }
 }
 
 shadowJar {
-    archiveClassifier.set('')
-    relocate 'org.java_websocket', 'world.terax.shadow.java_websocket'
-    relocate 'com.google.gson', 'world.terax.shadow.gson'
+    archiveBaseName.set('TeraxPay')
+    archiveVersion.set('') // Remove versão do nome do JAR
+    archiveClassifier.set('') // Remove o "-all"
+    relocate 'com.google.zxing', 'world.terax.shaded.zxing'
+    relocate 'org.java_websocket', 'world.terax.libs.java_websocket'
 }
+
+jar {
+    enabled = false
+}
+
+task copyJar(type: Copy) {
+    dependsOn shadowJar
+    from 'build/libs/TeraxPay.jar'
+    into 'D:/.terax.world/servers/dev01/plugins'
+}
+
+build.dependsOn shadowJar
+build.finalizedBy copyJar
