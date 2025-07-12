@@ -1,11 +1,7 @@
 package world.terax.pay.redis;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import org.bukkit.Bukkit;
-import org.bukkit.Material;
+import com.google.gson.*;
+import org.bukkit.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -22,9 +18,15 @@ import java.io.File;
 @SuppressWarnings({"deprecation", "CallToPrintStackTrace"})
 public class RedisListener extends JedisPubSub implements Runnable {
 
+    private final TeraxPay plugin = TeraxPay.getInstance();
+
+    private volatile boolean running = true;
+    private Jedis jedis;
+
     @Override
     public void onMessage(String channel, String message) {
-        if (!"invoice:update".equals(channel)) return;
+        if (!running || !TeraxPay.getInstance().isEnabled()) return;
+        if (!channel.equals(plugin.getConfig().getString("settings.redis-channel", "invoice:update"))) return;
 
         JsonObject data = new JsonParser().parse(message).getAsJsonObject();
 
@@ -33,63 +35,75 @@ public class RedisListener extends JedisPubSub implements Runnable {
         JsonArray commands = data.has("commands") ? data.getAsJsonArray("commands") : new JsonArray();
         JsonArray permissions = data.has("permissions") ? data.getAsJsonArray("permissions") : new JsonArray();
 
+        if (!"approved".equalsIgnoreCase(status)) return;
 
-        if (!"approved".equalsIgnoreCase(status)) {
-            return;
-        } else {
-            Bukkit.getScheduler().runTask(TeraxPay.getInstance(), () -> {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player player = Bukkit.getPlayerExact(nick);
+            if (player == null) return;
 
-                Player player = Bukkit.getPlayerExact(nick);
-                if (player == null) return;
+            for (JsonElement cmd : commands) {
+                String command = cmd.getAsString().replace("%player%", player.getName());
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+            }
 
-                for (JsonElement cmd : commands){
-                    String command = cmd.getAsString().replace("%player%", player.getName());
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
-                }
+            for (JsonElement perm : permissions) {
+                String permission = perm.getAsString();
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
+                        "lp user " + player.getName() + " permission set" + permission);
 
-                for (JsonElement perm : permissions){
-                    String permission = perm.getAsString();
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                            "lp user " + player.getName() + " permission set" + permission);
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
+                        "pex user " + player.getName() + " add " + permission);
+            }
 
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                            "pex user " + player.getName() + " add " + permission);
-                }
+            try {
+                File file = new File(plugin.getDataFolder(), "approved.png");
+                if (!file.exists()) return;
 
+                BufferedImage img = ImageIO.read(file);
+                MapView view = Bukkit.createMap(player.getWorld());
+                view.getRenderers().clear();
+                view.addRenderer(new ImageMapRenderer(img));
 
-                try {
-                    File file = new File(TeraxPay.getInstance().getDataFolder(), "approved.png");
-                    if (!file.exists()) return;
+                int hotbarSlot = plugin.getConfig().getInt("settings.map-slot", 4);
 
-                    BufferedImage img = ImageIO.read(file);
-                    MapView view = Bukkit.createMap(player.getWorld());
-                    view.getRenderers().clear();
-                    view.addRenderer(new ImageMapRenderer(img));
+                ItemStack mapItem = new ItemStack(Material.MAP, 1, view.getId());
+                ItemMeta meta = mapItem.getItemMeta();
+                meta.setDisplayName(plugin.getConfig().getString("messages.payment-confirmed"));
+                mapItem.setItemMeta(meta);
 
-                    ItemStack mapItem = new ItemStack(Material.MAP, 1, view.getId());
-                    ItemMeta meta = mapItem.getItemMeta();
-                    meta.setDisplayName("§aPagamento confirmado!");
-                    mapItem.setItemMeta(meta);
-
-                    int hotbarSlot = 4;
-                    player.getInventory().setItem(hotbarSlot, mapItem);
-
-                    player.sendMessage("§aPagamento confirmado!");
-                } catch (Exception ignored) {
-                }
-            });
-        }
+                player.getInventory().setItem(hotbarSlot, mapItem);
+                player.sendMessage(plugin.getConfig().getString("messages.payment-confirmed"));
+            } catch (Exception ignored) {}
+        });
     }
 
     @Override
     public void run() {
-        try (Jedis jedis = new Jedis("redis-19647.c308.sa-east-1-1.ec2.redns.redis-cloud.com", 19647)) {
-            jedis.auth("odOmwuzBID24UTE6rb9ABCLvoFKtbnzD");
-            jedis.subscribe(this, "invoice:update");
-            TeraxPay.getInstance().getLogger().info("Conectado ao Redis com sucesso.");
+        String host = plugin.getConfig().getString("settings.redis.host");
+        int port = plugin.getConfig().getInt("settings.redis.port");
+        String password = plugin.getConfig().getString("settings.redis.password");
+        String channel = plugin.getConfig().getString("settings.redis-channel");
+
+        try (Jedis jedis = new Jedis(host, port)) {
+            jedis.auth(password);
+            jedis.subscribe(this, channel);
+            plugin.getLogger().info(plugin.getConfig().getString("messages.redis-connected"));
         } catch (Exception e) {
             e.printStackTrace();
-            TeraxPay.getInstance().getLogger().severe("Erro ao conectar Redis: " + e);
+            plugin.getLogger().severe(plugin.getConfig().getString("messages.redis-error") + ": " + e.getMessage());
+        }
+    }
+
+    public void stop(){
+        running = false;
+        try {
+            if (jedis != null && jedis.isConnected()) {
+                jedis.close();
+            }
+
+            this.unsubscribe();
+        } catch (Exception ignored){
+
         }
     }
 }

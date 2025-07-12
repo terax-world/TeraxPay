@@ -9,6 +9,7 @@ import org.bukkit.map.MapView;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 
+@SuppressWarnings("deprecation")
 public class ImageMapRenderer extends MapRenderer {
     private final BufferedImage image;
     private boolean rendered = false;

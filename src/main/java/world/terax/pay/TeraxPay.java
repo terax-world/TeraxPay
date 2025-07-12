@@ -15,15 +15,29 @@ public class TeraxPay extends JavaPlugin {
     public void onEnable() {
         instance = this;
 
+        saveDefaultConfig();
+
         getCommand("pay").setExecutor(new PayCommand());
         saveResource("approved.png", false);
 
         getServer().getPluginManager().registerEvents(new MapInteractListener(), this);
-        Bukkit.getScheduler().runTaskAsynchronously(this, new RedisListener());
+
+        new Thread(() -> {
+            try {
+                RedisListener listener = new RedisListener();
+                listener.run();
+            } catch (Exception e) {
+                getLogger().severe("Erro ao iniciar o RedisListener: " + e.getMessage());
+            }
+        }, "Redis-Listener-Thread").start();
     }
 
     @Override
     public void onDisable() {
+        RedisListener redisListener = new RedisListener();
+        if (redisListener != null) {
+            redisListener.stop();
+        }
     }
 
 }

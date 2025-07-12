@@ -32,14 +32,13 @@ repositories {
 }
 
 dependencies {
-    // Spigot API
     compileOnly 'org.spigotmc:spigot:1.8.8-R0.1-SNAPSHOT'
 
-    // Utilitários
     implementation 'com.google.code.gson:gson:2.8.9'
-    implementation 'redis.clients:jedis:3.6.3'
+    implementation ('redis.clients:jedis:5.1.0') {
+        exclude group: 'org.slf4j'
+    }
 
-    // Lombok
     compileOnly 'org.projectlombok:lombok:1.18.30'
     annotationProcessor 'org.projectlombok:lombok:1.18.30'
 }
@@ -66,7 +65,9 @@ shadowJar {
     archiveClassifier.set('')
     relocate 'redis.clients', 'world.terax.libs.redis'
     mergeServiceFiles()
-    minimize()
+    minimize {
+        exclude(dependency('redis.clients:jedis'))
+    }
 }
 
 jar {

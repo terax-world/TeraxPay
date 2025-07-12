@@ -1,33 +1,42 @@
 package world.terax.pay.command;
 
-import org.bukkit.Bukkit;
-import org.bukkit.Material;
+import net.md_5.bungee.api.chat.ClickEvent;
+import net.md_5.bungee.api.chat.ComponentBuilder;
+import net.md_5.bungee.api.chat.HoverEvent;
+import net.md_5.bungee.api.chat.TextComponent;
+import org.bukkit.*;
 import org.bukkit.command.*;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.inventory.meta.MapMeta;
 import org.bukkit.map.MapView;
-
 import com.google.gson.*;
+
 import world.terax.pay.TeraxPay;
 import world.terax.pay.util.ImageMapRenderer;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.stream.Collectors;
 
 @SuppressWarnings("deprecation")
 public class PayCommand implements CommandExecutor {
+
+    private final TeraxPay plugin;
+
+    public PayCommand() {
+        this.plugin = TeraxPay.getInstance();
+    }
+
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!(sender instanceof Player) || args.length != 2) {
-            sender.sendMessage("§cUso: /pay <productSlug> <pix|link>");
+            sender.sendMessage(plugin.getConfig().getString("messages.usage"));
             return true;
         }
 
@@ -35,18 +44,20 @@ public class PayCommand implements CommandExecutor {
         String productSlug = args[0];
         String method = args[1].toLowerCase();
 
-        Bukkit.getScheduler().runTaskAsynchronously(TeraxPay.getInstance(), () -> createInvoice(player, productSlug, method));
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> createInvoice(player, productSlug, method));
         return true;
     }
 
     private void createInvoice(Player player, String productSlug, String method) {
         try {
+            String apiUrl = plugin.getConfig().getString("settings.api-endpoint");
+
             JsonObject payload = new JsonObject();
             payload.addProperty("productSlug", productSlug);
             payload.addProperty("nick", player.getName());
             payload.addProperty("paymentMethod", method);
 
-            HttpURLConnection conn = (HttpURLConnection) new URL("https://api.terax.world/invoices").openConnection();
+            HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
@@ -61,19 +72,36 @@ public class PayCommand implements CommandExecutor {
             String responseBody = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8)).lines().collect(Collectors.joining("\n"));
 
             if (code != 201) {
-                player.sendMessage("§cErro ao criar pagamento (HTTP " + code + ")");
+                String msg = plugin.getConfig().getString("messages.error-http").replace("%code%", String.valueOf(code));
+                player.sendMessage(msg);
                 return;
             }
 
             JsonObject checkout = new JsonParser().parse(responseBody).getAsJsonObject().getAsJsonObject("checkoutData");
             if ("pix".equals(method)) {
                 String base64 = checkout.get("qrcode").getAsString();
-                Bukkit.getScheduler().runTask(TeraxPay.getInstance(), () -> showQRCodeMap(player, base64));
+                Bukkit.getScheduler().runTask(plugin, () -> showQRCodeMap(player, base64));
             } else {
-                player.sendMessage("§aSeu link de pagamento: §b" + checkout.get("link").getAsString());
+                String link = checkout.get("link").getAsString();
+
+                FileConfiguration config = plugin.getConfig();
+                String text = config.getString("messages.payment-link.text");
+                String clickable = config.getString("messages.payment-link.clickable");
+                String hover = config.getString("messages.payment-link.hover");
+
+                TextComponent component = new TextComponent(text.replace("%clickable%", clickable));
+                component.setClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, link));
+                component.setHoverEvent(new HoverEvent(
+                        HoverEvent.Action.SHOW_TEXT,
+                        new ComponentBuilder(hover).create()
+                ));
+
+                player.spigot().sendMessage(component);
             }
+
+
         } catch (Exception e) {
-            player.sendMessage("§cErro ao processar pagamento.");
+            player.sendMessage(plugin.getConfig().getString("messages.error-generic"));
         }
     }
 
@@ -86,18 +114,19 @@ public class PayCommand implements CommandExecutor {
             map.getRenderers().clear();
             map.addRenderer(new ImageMapRenderer(image));
 
+            int hotbarSlot = plugin.getConfig().getInt("settings.map-slot", 4);
+
             ItemStack mapItem = new ItemStack(Material.MAP, 1, map.getId());
             ItemMeta meta = mapItem.getItemMeta();
-            meta.setDisplayName("§aQRCODE para pagamento!");
+            meta.setDisplayName(plugin.getConfig().getString("messages.qrcode-map-name"));
             mapItem.setItemMeta(meta);
 
-            int hotbarSlot = 4;
             player.getInventory().setItem(hotbarSlot, mapItem);
 
-            player.sendMessage("§aQRCODE emitido! caso queira cancelar, apenas clique com o botão direito do mouse.");
+            player.sendMessage(plugin.getConfig().getString("messages.qrcode-ready"));
+
         } catch (Exception e) {
-            player.sendMessage("§cErro ao carregar QR Code.");
+            player.sendMessage(plugin.getConfig().getString("messages.qrcode-error"));
         }
     }
-
 }
