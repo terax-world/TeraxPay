@@ -28,19 +28,16 @@ repositories {
         name = "sonatype"
         url = "https://oss.sonatype.org/content/groups/public/"
     }
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
     // Spigot API
     compileOnly 'org.spigotmc:spigot:1.8.8-R0.1-SNAPSHOT'
 
-    // QR Code (ZXing)
-    implementation 'com.google.zxing:core:3.5.1'
-    implementation 'com.google.zxing:javase:3.5.1'
-
     // Utilitários
-    implementation 'com.google.code.gson:gson:2.8.8'
-    implementation 'org.java-websocket:Java-WebSocket:1.5.3'
+    implementation 'com.google.code.gson:gson:2.8.9'
+    implementation 'redis.clients:jedis:3.6.3'
 
     // Lombok
     compileOnly 'org.projectlombok:lombok:1.18.30'
@@ -65,10 +62,11 @@ processResources {
 
 shadowJar {
     archiveBaseName.set('TeraxPay')
-    archiveVersion.set('') // Remove versão do nome do JAR
-    archiveClassifier.set('') // Remove o "-all"
-    relocate 'com.google.zxing', 'world.terax.shaded.zxing'
-    relocate 'org.java_websocket', 'world.terax.libs.java_websocket'
+    archiveVersion.set('')
+    archiveClassifier.set('')
+    relocate 'redis.clients', 'world.terax.libs.redis'
+    mergeServiceFiles()
+    minimize()
 }
 
 jar {

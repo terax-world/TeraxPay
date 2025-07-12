@@ -4,4 +4,4 @@ main: world.terax.pay.TeraxPay
 commands:
   pay:
     description: Compra um produto usando Pix ou Cartão
-    usage: /pay <slug-produto> <qrcode|link> <nick>
+    usage: /pay <slug-produto> <qrcode|link>
