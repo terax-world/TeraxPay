@@ -21,7 +21,9 @@ import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.stream.Collectors;
 
 @SuppressWarnings("deprecation")
@@ -50,7 +52,7 @@ public class PayCommand implements CommandExecutor {
 
     private void createInvoice(Player player, String productSlug, String method) {
         try {
-            String apiUrl = plugin.getConfig().getString("settings.api-endpoint");
+            String apiUrl = plugin.getConfig().getString("settings.api-endpoint-invoices");
 
             JsonObject payload = new JsonObject();
             payload.addProperty("productSlug", productSlug);
@@ -75,7 +77,7 @@ public class PayCommand implements CommandExecutor {
                 String msg = plugin.getConfig().getString("messages.error-http").replace("%code%", String.valueOf(code));
                 player.sendMessage(msg);
 
-                plugin.getLogger().warning("[HTTP] Erro ao criar pagamento: código " + code);
+                plugin.getLogger().warning("[HTTP] Erro ao criar pagamento: codigo " + code);
                 plugin.getLogger().warning("[HTTP] Resposta da API: " + responseBody);
                 plugin.getLogger().warning("[HTTP] Payload enviado: " + payload.toString());
 
@@ -84,10 +86,14 @@ public class PayCommand implements CommandExecutor {
 
 
             JsonObject checkout = new JsonParser().parse(responseBody).getAsJsonObject().getAsJsonObject("checkoutData");
+
+            String invoiceId = checkout.get("invoiceId").getAsString();
+
             if ("pix".equals(method)) {
                 String base64 = checkout.get("qrcode").getAsString();
-                Bukkit.getScheduler().runTask(plugin, () -> showQRCodeMap(player, base64));
-            } else {
+                Bukkit.getScheduler().runTask(plugin, () -> showQRCodeMap(player, base64, invoiceId));
+            }
+            else {
                 String link = checkout.get("link").getAsString();
 
                 FileConfiguration config = plugin.getConfig();
@@ -111,7 +117,7 @@ public class PayCommand implements CommandExecutor {
         }
     }
 
-    private void showQRCodeMap(Player player, String base64) {
+    private void showQRCodeMap(Player player, String base64, String invoiceId) {
         try {
             byte[] bytes = Base64.getDecoder().decode(base64);
             BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
@@ -122,17 +128,33 @@ public class PayCommand implements CommandExecutor {
 
             int hotbarSlot = plugin.getConfig().getInt("settings.map-slot", 4);
 
+            // Salvar o item atual do slot, se existir
+            ItemStack previous = player.getInventory().getItem(hotbarSlot);
+            if (previous != null && previous.getType() != Material.AIR) {
+                plugin.getSavedMapItems().put(player.getUniqueId(), previous.clone());
+            }
+
             ItemStack mapItem = new ItemStack(Material.MAP, 1, map.getId());
             ItemMeta meta = mapItem.getItemMeta();
             meta.setDisplayName(plugin.getConfig().getString("messages.qrcode-map-name"));
-            mapItem.setItemMeta(meta);
 
+            // Lore com o invoiceId oculto
+            List<String> lore = new ArrayList<>();
+            lore.add(ChatColor.GRAY + "#invoice:" + invoiceId);
+            meta.setLore(lore);
+
+            mapItem.setItemMeta(meta);
             player.getInventory().setItem(hotbarSlot, mapItem);
 
             player.sendMessage(plugin.getConfig().getString("messages.qrcode-ready"));
+            player.playSound(player.getLocation(), Sound.ITEM_PICKUP, 1.0f, 1.0f);
 
         } catch (Exception e) {
             player.sendMessage(plugin.getConfig().getString("messages.qrcode-error"));
+            plugin.getLogger().severe("[MAP] Erro ao mostrar mapa: " + e.getMessage());
+            e.printStackTrace();
         }
     }
+
+
 }

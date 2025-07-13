@@ -4,24 +4,26 @@ import com.google.gson.*;
 import org.bukkit.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.map.MapView;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPubSub;
 import world.terax.pay.TeraxPay;
-import world.terax.pay.util.ImageMapRenderer;
+import world.terax.pay.api.TitleAPI;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.File;
-
-@SuppressWarnings({"deprecation", "CallToPrintStackTrace"})
+@SuppressWarnings({"CallToPrintStackTrace"})
 public class RedisListener extends JedisPubSub implements Runnable {
 
     private final TeraxPay plugin = TeraxPay.getInstance();
 
+    private Thread listenerThread;
+
     private volatile boolean running = true;
     private Jedis jedis;
+    private final Set<String> processedInvoices = ConcurrentHashMap.newKeySet();
+
 
     @Override
     public void onMessage(String channel, String message) {
@@ -34,10 +36,24 @@ public class RedisListener extends JedisPubSub implements Runnable {
             return;
         }
 
-        plugin.getLogger().info("[REDIS] Conteúdo da mensagem: " + message);
+        plugin.getLogger().info("[REDIS] Conteudo da mensagem: " + message);
 
         try {
-            JsonObject data = new JsonParser().parse(message).getAsJsonObject();
+            JsonParser parser = new JsonParser();
+            JsonElement parsed = parser.parse(message);
+
+            if (parsed.isJsonPrimitive() && parsed.getAsJsonPrimitive().isString()) {
+                parsed = parser.parse(parsed.getAsString());
+            }
+
+            JsonObject data = parsed.getAsJsonObject();
+
+            String id = data.get("id").getAsString();
+            if (processedInvoices.contains(id)) {
+                plugin.getLogger().info("[REDIS] Invoice ja processada: " + id);
+                return;
+            }
+            processedInvoices.add(id);
 
             String status = data.get("status").getAsString();
             String nick = data.get("nick").getAsString();
@@ -62,7 +78,7 @@ public class RedisListener extends JedisPubSub implements Runnable {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 Player player = Bukkit.getPlayerExact(nick);
                 if (player == null) {
-                    plugin.getLogger().warning("[REDIS] Jogador não encontrado: " + nick);
+                    plugin.getLogger().warning("[REDIS] Jogador nao encontrado: " + nick);
                     return;
                 }
 
@@ -81,50 +97,63 @@ public class RedisListener extends JedisPubSub implements Runnable {
                     Bukkit.getScheduler().runTaskLater(plugin, () -> {
                         Player p = Bukkit.getPlayerExact(nick);
                         if (p == null) {
-                            plugin.getLogger().warning("[REDIS] Jogador não encontrado para remoção: " + nick);
+                            plugin.getLogger().warning("[REDIS] Jogador nao encontrado para remocao: " + nick);
                             return;
                         }
 
                         for (JsonElement cmd : commandsRemove) {
                             String commandRemove = cmd.getAsString().replace("%player%", p.getName());
                             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), commandRemove);
-                            plugin.getLogger().info("[REDIS] Comando de remoção executado: " + commandRemove);
+                            plugin.getLogger().info("[REDIS] Comando de remocao executado: " + commandRemove);
                         }
+
+                        markInvoiceAsFinished(id);
                     }, delayTicks);
                 }
 
-                // Log de imagem (imagem aprovada)
                 try {
-                    File file = new File(plugin.getDataFolder(), "approved.png");
-                    if (!file.exists()) {
-                        plugin.getLogger().warning("[REDIS] Arquivo 'approved.png' não encontrado.");
-                        return;
-                    }
+                    TitleAPI.sendTitle(
+                            player,
+                            plugin.getConfig().getString("messages.message-agradecimento.title"),
+                            plugin.getConfig().getString("messages.message-agradecimento.subtitle")
+                    );
 
-                    BufferedImage img = ImageIO.read(file);
-                    MapView view = Bukkit.createMap(player.getWorld());
-                    view.getRenderers().clear();
-                    view.addRenderer(new ImageMapRenderer(img));
+                    ItemStack item = player.getItemInHand();
 
+                    if (item == null || item.getType() != Material.MAP) return;
+                    if (!item.hasItemMeta() || !item.getItemMeta().hasDisplayName()) return;
+
+                    String displayName = item.getItemMeta().getDisplayName();
+                    if (!displayName.equalsIgnoreCase(plugin.getConfig().getString("messages.qrcode-map-name"))) return;
+
+                    // Remover o mapa
+                    player.getInventory().removeItem(item);
+
+                    // Restaurar o item anterior se existir
+                    ItemStack backup = plugin.getSavedMapItems().remove(player.getUniqueId());
                     int hotbarSlot = plugin.getConfig().getInt("settings.map-slot", 4);
 
-                    ItemStack mapItem = new ItemStack(Material.MAP, 1, view.getId());
-                    ItemMeta meta = mapItem.getItemMeta();
-                    meta.setDisplayName(plugin.getConfig().getString("messages.payment-confirmed"));
-                    mapItem.setItemMeta(meta);
+                    if (backup != null) {
+                        player.getInventory().setItem(hotbarSlot, backup);
+                    }
 
-                    player.getInventory().setItem(hotbarSlot, mapItem);
-                    player.sendMessage(plugin.getConfig().getString("messages.payment-confirmed"));
-                    plugin.getLogger().info("[REDIS] Mapa com imagem 'approved.png' enviado para: " + nick);
+                    player.playSound(player.getLocation(), Sound.LEVEL_UP, 1.0f, 1.0f);
+
                 } catch (Exception e) {
-                    plugin.getLogger().severe("[REDIS] Erro ao aplicar imagem 'approved.png': " + e.getMessage());
                     e.printStackTrace();
                 }
+
             });
         } catch (Exception e) {
             plugin.getLogger().severe("[REDIS] Erro ao processar a mensagem: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    public void start() {
+        running = true;
+        listenerThread = new Thread(this, "Redis-Listener-Thread");
+        listenerThread.start();
     }
 
 
@@ -137,30 +166,39 @@ public class RedisListener extends JedisPubSub implements Runnable {
 
         plugin.getLogger().info("[REDIS] Conectando ao Redis: host=" + host + ", port=" + port + ", channel=" + channel);
 
-        try (Jedis jedis = new Jedis(host, port)) {
+        try {
+            jedis = new Jedis(host, port);
             jedis.auth(password);
             plugin.getLogger().info("[REDIS] Autenticado com sucesso no Redis.");
-            jedis.subscribe(this, channel);
+            jedis.subscribe(this, channel); // BLOQUEIA AQUI
             plugin.getLogger().info(plugin.getConfig().getString("messages.redis-connected"));
         } catch (Exception e) {
-            plugin.getLogger().severe("[REDIS] Erro ao conectar ao Redis: " + e.getMessage());
-            e.printStackTrace();
+        } finally {
+            if (jedis != null) {
+                try {
+                    jedis.close();
+                } catch (Exception ignored) {
+
+                }
+            }
         }
     }
 
 
-    public void stop(){
+
+    public void stop() {
         running = false;
         try {
+            this.unsubscribe();
             if (jedis != null && jedis.isConnected()) {
                 jedis.close();
             }
-
-            this.unsubscribe();
-        } catch (Exception ignored){
-
+            plugin.getLogger().info("[REDIS] RedisListener parado com sucesso.");
+        } catch (Exception e) {
+            plugin.getLogger().warning("[REDIS] Erro ao parar o RedisListener: " + e.getMessage());
         }
     }
+
 
     private long parseExpirationToTicks(String expiration) {
         try {
@@ -193,6 +231,24 @@ public class RedisListener extends JedisPubSub implements Runnable {
             return 0;
         }
     }
+
+    private void markInvoiceAsFinished(String id) {
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                String apiUrl = plugin.getConfig().getString("settings.api-endpoint-invoices") + id + "/finish";
+                HttpURLConnection con = (HttpURLConnection) new URL(apiUrl).openConnection();
+                con.setRequestMethod("POST");
+                con.setConnectTimeout(5000);
+                con.setReadTimeout(5000);
+                con.getInputStream().close();
+
+                plugin.getLogger().info("[REDIS] Invoice marcada como finalizada na API: " + id);
+            } catch (Exception e) {
+                plugin.getLogger().warning("[REDIS] Erro ao marcar invoice como finalizada: " + e.getMessage());
+            }
+        });
+    }
+
 
 
 }

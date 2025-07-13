@@ -35,9 +35,11 @@ dependencies {
     compileOnly 'org.spigotmc:spigot:1.8.8-R0.1-SNAPSHOT'
 
     implementation 'com.google.code.gson:gson:2.8.9'
-    implementation ('redis.clients:jedis:5.1.0') {
-        exclude group: 'org.slf4j'
-    }
+    implementation 'redis.clients:jedis:5.1.0'
+
+    implementation 'org.apache.logging.log4j:log4j-slf4j-impl:2.14.1'
+    implementation 'org.slf4j:slf4j-api:1.7.30'
+    implementation 'org.slf4j:slf4j-log4j12:1.7.30'
 
     compileOnly 'org.projectlombok:lombok:1.18.30'
     annotationProcessor 'org.projectlombok:lombok:1.18.30'
