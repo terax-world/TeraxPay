@@ -26,56 +26,107 @@ public class RedisListener extends JedisPubSub implements Runnable {
     @Override
     public void onMessage(String channel, String message) {
         if (!running || !TeraxPay.getInstance().isEnabled()) return;
-        if (!channel.equals(plugin.getConfig().getString("settings.redis-channel", "invoice:update"))) return;
 
-        JsonObject data = new JsonParser().parse(message).getAsJsonObject();
+        plugin.getLogger().info("[REDIS] Mensagem recebida no canal: " + channel);
 
-        String status = data.get("status").getAsString();
-        String nick = data.get("nick").getAsString();
-        JsonArray commands = data.has("commands") ? data.getAsJsonArray("commands") : new JsonArray();
-        JsonArray permissions = data.has("permissions") ? data.getAsJsonArray("permissions") : new JsonArray();
+        if (!channel.equals(plugin.getConfig().getString("settings.redis-channel", "invoice:update"))) {
+            plugin.getLogger().info("[REDIS] Canal ignorado: " + channel);
+            return;
+        }
 
-        if (!"approved".equalsIgnoreCase(status)) return;
+        plugin.getLogger().info("[REDIS] Conteúdo da mensagem: " + message);
 
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            Player player = Bukkit.getPlayerExact(nick);
-            if (player == null) return;
+        try {
+            JsonObject data = new JsonParser().parse(message).getAsJsonObject();
 
-            for (JsonElement cmd : commands) {
-                String command = cmd.getAsString().replace("%player%", player.getName());
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+            String status = data.get("status").getAsString();
+            String nick = data.get("nick").getAsString();
+            String expiration = data.has("expiration") ? data.get("expiration").getAsString() : "";
+
+            plugin.getLogger().info("[REDIS] status=" + status + ", nick=" + nick + ", expiration=" + expiration);
+
+            if (!"approved".equalsIgnoreCase(status)) {
+                plugin.getLogger().info("[REDIS] Status diferente de 'approved', ignorando.");
+                return;
             }
 
-            for (JsonElement perm : permissions) {
-                String permission = perm.getAsString();
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                        "lp user " + player.getName() + " permission set" + permission);
+            // Adicionando log aqui antes de processar o comando
+            plugin.getLogger().info("[REDIS] Processando comandos para o jogador: " + nick);
 
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                        "pex user " + player.getName() + " add " + permission);
-            }
+            JsonArray commands = data.has("commands") ? data.getAsJsonArray("commands") : new JsonArray();
+            JsonArray commandsRemove = data.has("commandsRemove") ? data.getAsJsonArray("commandsRemove") : new JsonArray();
 
-            try {
-                File file = new File(plugin.getDataFolder(), "approved.png");
-                if (!file.exists()) return;
+            plugin.getLogger().info("[REDIS] Comandos para executar: " + commands);
+            plugin.getLogger().info("[REDIS] Comandos para remover: " + commandsRemove);
 
-                BufferedImage img = ImageIO.read(file);
-                MapView view = Bukkit.createMap(player.getWorld());
-                view.getRenderers().clear();
-                view.addRenderer(new ImageMapRenderer(img));
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player player = Bukkit.getPlayerExact(nick);
+                if (player == null) {
+                    plugin.getLogger().warning("[REDIS] Jogador não encontrado: " + nick);
+                    return;
+                }
 
-                int hotbarSlot = plugin.getConfig().getInt("settings.map-slot", 4);
+                // Comando para o jogador
+                for (JsonElement cmd : commands) {
+                    String command = cmd.getAsString().replace("%player%", player.getName());
+                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), command);
+                    plugin.getLogger().info("[REDIS] Comando executado: " + command);
+                }
 
-                ItemStack mapItem = new ItemStack(Material.MAP, 1, view.getId());
-                ItemMeta meta = mapItem.getItemMeta();
-                meta.setDisplayName(plugin.getConfig().getString("messages.payment-confirmed"));
-                mapItem.setItemMeta(meta);
+                long delayTicks = parseExpirationToTicks(expiration);
+                plugin.getLogger().info("[REDIS] Delay para remover comandos em ticks: " + delayTicks);
 
-                player.getInventory().setItem(hotbarSlot, mapItem);
-                player.sendMessage(plugin.getConfig().getString("messages.payment-confirmed"));
-            } catch (Exception ignored) {}
-        });
+                // Se houver comandos para remover após um delay
+                if (delayTicks > 0 && commandsRemove.size() > 0) {
+                    Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                        Player p = Bukkit.getPlayerExact(nick);
+                        if (p == null) {
+                            plugin.getLogger().warning("[REDIS] Jogador não encontrado para remoção: " + nick);
+                            return;
+                        }
+
+                        for (JsonElement cmd : commandsRemove) {
+                            String commandRemove = cmd.getAsString().replace("%player%", p.getName());
+                            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), commandRemove);
+                            plugin.getLogger().info("[REDIS] Comando de remoção executado: " + commandRemove);
+                        }
+                    }, delayTicks);
+                }
+
+                // Log de imagem (imagem aprovada)
+                try {
+                    File file = new File(plugin.getDataFolder(), "approved.png");
+                    if (!file.exists()) {
+                        plugin.getLogger().warning("[REDIS] Arquivo 'approved.png' não encontrado.");
+                        return;
+                    }
+
+                    BufferedImage img = ImageIO.read(file);
+                    MapView view = Bukkit.createMap(player.getWorld());
+                    view.getRenderers().clear();
+                    view.addRenderer(new ImageMapRenderer(img));
+
+                    int hotbarSlot = plugin.getConfig().getInt("settings.map-slot", 4);
+
+                    ItemStack mapItem = new ItemStack(Material.MAP, 1, view.getId());
+                    ItemMeta meta = mapItem.getItemMeta();
+                    meta.setDisplayName(plugin.getConfig().getString("messages.payment-confirmed"));
+                    mapItem.setItemMeta(meta);
+
+                    player.getInventory().setItem(hotbarSlot, mapItem);
+                    player.sendMessage(plugin.getConfig().getString("messages.payment-confirmed"));
+                    plugin.getLogger().info("[REDIS] Mapa com imagem 'approved.png' enviado para: " + nick);
+                } catch (Exception e) {
+                    plugin.getLogger().severe("[REDIS] Erro ao aplicar imagem 'approved.png': " + e.getMessage());
+                    e.printStackTrace();
+                }
+            });
+        } catch (Exception e) {
+            plugin.getLogger().severe("[REDIS] Erro ao processar a mensagem: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
+
 
     @Override
     public void run() {
@@ -84,15 +135,19 @@ public class RedisListener extends JedisPubSub implements Runnable {
         String password = plugin.getConfig().getString("settings.redis.password");
         String channel = plugin.getConfig().getString("settings.redis-channel");
 
+        plugin.getLogger().info("[REDIS] Conectando ao Redis: host=" + host + ", port=" + port + ", channel=" + channel);
+
         try (Jedis jedis = new Jedis(host, port)) {
             jedis.auth(password);
+            plugin.getLogger().info("[REDIS] Autenticado com sucesso no Redis.");
             jedis.subscribe(this, channel);
             plugin.getLogger().info(plugin.getConfig().getString("messages.redis-connected"));
         } catch (Exception e) {
+            plugin.getLogger().severe("[REDIS] Erro ao conectar ao Redis: " + e.getMessage());
             e.printStackTrace();
-            plugin.getLogger().severe(plugin.getConfig().getString("messages.redis-error") + ": " + e.getMessage());
         }
     }
+
 
     public void stop(){
         running = false;
@@ -106,4 +161,38 @@ public class RedisListener extends JedisPubSub implements Runnable {
 
         }
     }
+
+    private long parseExpirationToTicks(String expiration) {
+        try {
+            if (expiration == null || expiration.isEmpty()) return 0;
+
+            long multiplier;
+            char unit = Character.toUpperCase(expiration.charAt(expiration.length() - 1));
+            int amount = Integer.parseInt(expiration.substring(0, expiration.length() - 1));
+
+            plugin.getLogger().info("[REDIS] Convertendo expiração para ticks: " + expiration + " -> " + amount + " " + unit);
+
+            switch (unit) {
+                case 'M': // minutos
+                    multiplier = 60L * 20L;
+                    break;
+                case 'H': // horas
+                    multiplier = 60L * 60L * 20L;
+                    break;
+                case 'D': // dias
+                    multiplier = 24L * 60L * 60L * 20L;
+                    break;
+                default:
+                    return 0;
+            }
+
+            return amount * multiplier;
+        } catch (Exception e) {
+            plugin.getLogger().severe("[REDIS] Erro ao calcular expiração: " + e.getMessage());
+            e.printStackTrace();
+            return 0;
+        }
+    }
+
+
 }

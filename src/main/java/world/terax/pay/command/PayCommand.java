@@ -71,11 +71,17 @@ public class PayCommand implements CommandExecutor {
             InputStream is = (code < 400) ? conn.getInputStream() : conn.getErrorStream();
             String responseBody = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8)).lines().collect(Collectors.joining("\n"));
 
-            if (code != 201) {
+            if (code < 200 || code >= 300) {
                 String msg = plugin.getConfig().getString("messages.error-http").replace("%code%", String.valueOf(code));
                 player.sendMessage(msg);
+
+                plugin.getLogger().warning("[HTTP] Erro ao criar pagamento: código " + code);
+                plugin.getLogger().warning("[HTTP] Resposta da API: " + responseBody);
+                plugin.getLogger().warning("[HTTP] Payload enviado: " + payload.toString());
+
                 return;
             }
+
 
             JsonObject checkout = new JsonParser().parse(responseBody).getAsJsonObject().getAsJsonObject("checkoutData");
             if ("pix".equals(method)) {
